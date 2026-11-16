@@ -1,0 +1,27 @@
+{
+  "name": "Rex",
+  "label": "Rex (sprite pack)",
+  "facing": "right",
+  "fps": 8,
+  "states": {
+    "idle":    ["idle_*.png"],
+    "walk":    ["walk_*.png"],
+    "sleep":   ["sleep_*.png"],
+    "angry":   ["angry_*.png"],
+    "laugh":   ["laugh_*.png"],
+    "happy":   ["happy_*.png"],
+    "held":    ["held_*.png"],
+    "drink":   ["drink_*.png"],
+    "stretch": ["stretch_*.png"],
+    "talk":    ["talk_*.png"]
+  },
+  "anchors": {
+    "head_top": [80, 18],
+    "mouth": [100, 58],
+    "eye": [90, 40]
+  },
+  "lines": {
+    "intro": ["Hi! I'm {name}!"],
+    "water": ["Time to drink some water!"]
+  }
+}

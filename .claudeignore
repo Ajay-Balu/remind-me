@@ -1,0 +1,16 @@
+# Keep AI context focused on source code.
+build/
+dist/
+*.spec
+icon.ico
+__pycache__/
+.ruff_cache/
+.venv/
+venv/
+Claude outputs/
+*.log
+# Binary assets - not useful as context
+docs/images/
+*.png
+*.ico
+*.exe

@@ -1,2 +1,9 @@
-# Auto detect text files and perform LF normalization
 * text=auto
+*.py   text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+*.txt  text eol=crlf
+# Windows batch files must keep CRLF line endings
+*.bat  text eol=crlf
+*.png  binary
+*.ico  binary

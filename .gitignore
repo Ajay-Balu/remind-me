@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# PyInstaller build output (build.bat)
+build/
+dist/
+*.spec
+icon.ico
+
+# Tooling
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+.vscode/
+.idea/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Local scratch / AI session outputs
+Claude outputs/
+*.log
+*.tmp
+
+# Personal sprite packs you don't want to publish (keep the template)
+assets/avatars/*
+!assets/avatars/_template/
