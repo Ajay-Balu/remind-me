@@ -3,6 +3,11 @@
 All notable changes to this project are listed here. Format based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [1.0.1] - 2026-11-19
+### Fixed
+- The app kept running in the background while the screen was locked or the laptop lid was closed. It now goes quiet when the screen is locked, the display turns off (lid closed), the PC goes to sleep or the screensaver is running. In that state there are no reminders, no voice and no mouse nudge, keep-awake is released so Windows can sleep, and the pet's animation stops.
+- After you unlock or resume, it waits about 20 seconds before showing any reminders that came due, and the eye, posture and break timers restart.
+
 ## [1.0.0] - 2026-11-16
 First public release.
 

@@ -66,6 +66,7 @@ class Pet:
         self._last = time.monotonic()
         self._last_ontop = 0
         self.vy = 0.0
+        self.dormant = False        # PC locked / lid closed: freeze, draw nothing new
         self.job = None             # gardening job
         self.garden = Garden(self)
         self._gravity_on = self.gravity
@@ -174,6 +175,10 @@ class Pet:
     # ------------------------------------------------------------ main loop
     def _loop(self):
         now = time.monotonic()
+        if self.dormant:   # locked / lid closed: no animation, no CPU
+            self._last = now
+            self._after = self.win.after(1000, self._loop)
+            return
         dt = min(0.1, now - self._last)
         self._last = now
         try:
@@ -361,7 +366,7 @@ class Pet:
                 self.set_state("hop", 0.6)
             left, _, right, _ = winapi.work_area(self.root)
             self.facing = 1 if self.center()[0] < (left + right) / 2 else -1
-        if b.speak and self.cfg["voice"].get("enabled", True):
+        if b.speak and self.cfg["voice"].get("enabled", True) and not self.dormant:
             v = self.cfg["voice"]
             self.app.voice.speak(b.text, v.get("name", ""), v.get("rate", 0), v.get("volume", 90))
             self.speak_until = time.monotonic() + self.app.voice.estimate_seconds(
@@ -417,6 +422,31 @@ class Pet:
             self.set_state("stretch")
         elif event == "break_end":
             self.set_state("happy", 2)
+
+    def set_dormant(self, on):
+        """Freeze while the PC is locked / lid closed; wake up afterwards."""
+        if on == self.dormant:
+            return
+        if on:
+            self.job = None
+            self._dragging = False
+            if self.bubble and not self.bubble.closed and not self.bubble.blocking:
+                self.bubble.close("dormant")
+            if self.state not in ("sleep",):
+                self.set_state("sleep")
+            self.away_sleep = True
+            try:
+                self._render(time.monotonic())   # leave it drawn asleep
+            except Exception:
+                pass
+            self.dormant = True
+        else:
+            self.dormant = False
+            self._last = time.monotonic()
+            if self.gravity:
+                self.y = self.ground_y()       # the taskbar may have moved
+                self._apply_geometry()
+            self.wake_up()
 
     def sleep_away(self):
         if self.state not in ("held", "fall"):

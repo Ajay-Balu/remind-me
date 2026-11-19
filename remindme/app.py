@@ -61,7 +61,12 @@ class App:
         self.away_since = None
         self._ticks = 0
 
-        winapi.keep_awake(self.cfg["jiggle"]["enabled"] and self.cfg["jiggle"]["prevent_sleep"])
+        # pause everything while the screen is locked / lid closed / PC asleep
+        self.system = winapi.SystemWatcher()
+        self.dormant_since = None
+        self.dormant_reason = None
+        self._last_tick_wall = time.time()
+        self._apply_keep_awake()
         if self.cfg["start_with_windows"]:
             self._safe(winapi.set_start_with_windows, True)
 
@@ -188,9 +193,66 @@ class App:
             log.exception("tick failed")
         self.root.after(self.TICK_MS, self._tick)
 
+    def _apply_keep_awake(self):
+        """Keep-awake only while the user's session is actually in use; never
+        while locked / lid closed, so Windows can sleep normally."""
+        j = self.cfg["jiggle"]
+        winapi.keep_awake(j["enabled"] and j["prevent_sleep"] and self.dormant_since is None)
+
+    def _check_dormant(self, now):
+        """Returns True while the PC is locked / display off / asleep."""
+        gap = now - self._last_tick_wall
+        self._last_tick_wall = now
+        reason = self.system.dormant_reason()
+        if gap > 60 and reason is None:
+            # we were frozen (sleep/hibernate) and nobody locked the session
+            log.info("resumed after %.0fs gap", gap)
+            if self.dormant_since is None:
+                self.dormant_since = now - gap
+                self.dormant_reason = "sleep"
+        if reason:
+            if self.dormant_since is None:
+                self._enter_dormant(now, reason)
+            return True
+        if self.dormant_since is not None:
+            self._exit_dormant(now)
+        return False
+
+    def _enter_dormant(self, now, reason):
+        log.info("going quiet: %s", reason)
+        self.dormant_since = now
+        self.dormant_reason = reason
+        self.voice.stop()
+        self._apply_keep_awake()        # let Windows sleep / turn the display off
+        if self.pet:
+            self.pet.set_dormant(True)
+        self.tray.refresh()
+
+    def _exit_dormant(self, now):
+        secs = now - self.dormant_since
+        log.info("back after %s (%.0fs)", self.dormant_reason, secs)
+        self.dormant_since = None
+        self.dormant_reason = None
+        # start idle tracking fresh so we don't think you've been away
+        self._last_real_input = self._seen_input = winapi.last_input_tick()
+        self._jiggle_tick = None
+        self.last_jiggle = now
+        self.away_since = None
+        self._on_return(now, secs)
+        # don't greet you with a pile of overdue pop-ups the second you unlock
+        for kind in REMINDER_ORDER:
+            if self.next_due[kind] < now + 20:
+                self.next_due[kind] = now + 20 + 10 * REMINDER_ORDER.index(kind)
+        self._apply_keep_awake()
+        if self.pet:
+            self.pet.set_dormant(False)
+        self.tray.refresh()
+
     def _tick_inner(self):
         now = time.time()
         self._ticks += 1
+        if self._check_dormant(now):
+            return   # locked / lid closed / asleep: no reminders, voice or mouse nudge
         if dt.date.today() != self.stats_day:
             self.stats_day = dt.date.today()
             self.stats = {k: 0 for k in REMINDER_ORDER}
@@ -257,7 +319,7 @@ class App:
     def toggle_jiggle(self):
         j = self.cfg["jiggle"]
         j["enabled"] = not j["enabled"]
-        winapi.keep_awake(j["enabled"] and j["prevent_sleep"])
+        self._apply_keep_awake()
         self._safe(config.save, self.cfg)
         self.tray.refresh()
         self._notify("info", "Keep active " + ("on" if j["enabled"] else "off"),
@@ -398,8 +460,7 @@ class App:
             self.set_pet_enabled(pet_on)
         elif self.pet is not None:
             self.pet.apply_config()
-        j = new_cfg["jiggle"]
-        winapi.keep_awake(j["enabled"] and j["prevent_sleep"])
+        self._apply_keep_awake()
         if persist:
             self._safe(config.save, new_cfg)
             if startup_changed:
@@ -417,6 +478,8 @@ class App:
         return min(due) if due else None
 
     def status_line(self):
+        if self.dormant_since is not None:
+            return f"Sleeping ({self.dormant_reason})"
         if self.break_end is not None:
             return f"On a break – {_fmt_secs(self.break_end - time.time())} left"
         if self.is_paused():

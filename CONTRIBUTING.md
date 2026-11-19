@@ -4,7 +4,7 @@ Thanks for wanting to help! Bug fixes, new avatars, translations and UX polish a
 
 ## Getting set up
 ```bat
-git clone https://github.com/YOUR-USERNAME/remind-me.git
+git clone https://github.com/Ajay-Balu/remind-me.git
 cd remind-me
 py -m pip install -r requirements-dev.txt
 py run.pyw          :: runs with a console so you can see errors

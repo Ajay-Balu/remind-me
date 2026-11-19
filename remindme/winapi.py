@@ -250,3 +250,177 @@ def set_start_with_windows(enabled, name="RemindMe"):
                 winreg.DeleteValue(key, name)
             except FileNotFoundError:
                 pass
+
+
+# ---------------------------------------------------------------- lock / display / sleep
+def is_session_locked():
+    """True when the lock screen (or another secure desktop) is showing."""
+    if not IS_WIN:
+        return False
+    try:
+        hdesk = user32.OpenInputDesktop(0, False, 0x0001)  # DESKTOP_READOBJECTS
+        if not hdesk:
+            return True  # access denied -> Winlogon desktop (locked)
+        try:
+            buf = ctypes.create_unicode_buffer(256)
+            needed = wintypes.DWORD()
+            ok = user32.GetUserObjectInformationW(hdesk, 2, buf, ctypes.sizeof(buf),
+                                                  ctypes.byref(needed))  # UOI_NAME
+            return bool(ok) and buf.value.lower() != "default"
+        finally:
+            user32.CloseDesktop(hdesk)
+    except Exception:
+        return False
+
+
+def screensaver_running():
+    if not IS_WIN:
+        return False
+    try:
+        running = wintypes.BOOL()
+        user32.SystemParametersInfoW(0x0072, 0, ctypes.byref(running), 0)  # SPI_GETSCREENSAVERRUNNING
+        return bool(running.value)
+    except Exception:
+        return False
+
+
+if IS_WIN:
+    user32.OpenInputDesktop.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    user32.OpenInputDesktop.restype = wintypes.HANDLE
+    user32.GetUserObjectInformationW.argtypes = [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                 wintypes.DWORD, ctypes.POINTER(wintypes.DWORD)]
+    user32.GetUserObjectInformationW.restype = wintypes.BOOL
+    user32.CloseDesktop.argtypes = [wintypes.HANDLE]
+
+    LRESULT = ctypes.c_ssize_t
+    WNDPROC = ctypes.WINFUNCTYPE(LRESULT, wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                 wintypes.LPARAM)
+
+    class WNDCLASSW(ctypes.Structure):
+        _fields_ = [("style", wintypes.UINT), ("lpfnWndProc", WNDPROC),
+                    ("cbClsExtra", ctypes.c_int), ("cbWndExtra", ctypes.c_int),
+                    ("hInstance", wintypes.HINSTANCE), ("hIcon", wintypes.HICON),
+                    ("hCursor", wintypes.HANDLE), ("hbrBackground", wintypes.HBRUSH),
+                    ("lpszMenuName", wintypes.LPCWSTR), ("lpszClassName", wintypes.LPCWSTR)]
+
+    class GUID(ctypes.Structure):
+        _fields_ = [("Data1", wintypes.DWORD), ("Data2", wintypes.WORD),
+                    ("Data3", wintypes.WORD), ("Data4", ctypes.c_ubyte * 8)]
+
+    class POWERBROADCAST_SETTING(ctypes.Structure):
+        _fields_ = [("PowerSetting", GUID), ("DataLength", wintypes.DWORD),
+                    ("Data", wintypes.DWORD)]
+
+    def _guid(text):
+        import uuid
+        u = uuid.UUID(text)
+        g = GUID(u.time_low, u.time_mid, u.time_hi_version)
+        for i, b in enumerate(u.bytes[8:]):
+            g.Data4[i] = b
+        return g
+
+    user32.DefWindowProcW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM,
+                                      wintypes.LPARAM]
+    user32.DefWindowProcW.restype = LRESULT
+    user32.RegisterClassW.argtypes = [ctypes.POINTER(WNDCLASSW)]
+    user32.RegisterClassW.restype = wintypes.ATOM
+    user32.CreateWindowExW.argtypes = [wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                       wintypes.DWORD, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                                       ctypes.c_int, wintypes.HWND, wintypes.HMENU,
+                                       wintypes.HINSTANCE, wintypes.LPVOID]
+    user32.CreateWindowExW.restype = wintypes.HWND
+    user32.RegisterPowerSettingNotification.argtypes = [wintypes.HANDLE, ctypes.POINTER(GUID),
+                                                        wintypes.DWORD]
+    user32.RegisterPowerSettingNotification.restype = wintypes.HANDLE
+    kernel32.GetModuleHandleW.argtypes = [wintypes.LPCWSTR]
+    kernel32.GetModuleHandleW.restype = wintypes.HMODULE
+
+GUID_CONSOLE_DISPLAY_STATE = "6FE69556-704A-47A0-8F24-C28D936FDA47"
+GUID_LIDSWITCH_STATE_CHANGE = "BA3E0F4D-B817-4094-A2D1-D56379E6A0F3"
+WM_WTSSESSION_CHANGE = 0x02B1
+WM_POWERBROADCAST = 0x0218
+
+
+class SystemWatcher:
+    """Hidden window that hears Windows' lock/unlock, display on/off, lid
+    and sleep/resume notifications. Tk's event loop pumps its messages, so
+    the flags below are updated on the Tk thread.
+
+    `dormant_reason()` says why the app should go quiet (or None).
+    """
+
+    def __init__(self):
+        self.locked = False
+        self.display_off = False
+        self.lid_closed = False
+        self.suspending_at = 0.0
+        self.ok = False
+        self.hwnd = None
+        if IS_WIN:
+            try:
+                self._create()
+                self.ok = True
+            except Exception:
+                import logging
+                logging.getLogger("remindme").exception("system watcher unavailable")
+
+    def _create(self):
+        self._proc = WNDPROC(self._wndproc)   # keep a reference!
+        hinst = kernel32.GetModuleHandleW(None)
+        wc = WNDCLASSW()
+        wc.lpfnWndProc = self._proc
+        wc.hInstance = hinst
+        wc.lpszClassName = "RemindMeSystemWatcher"
+        self._wc = wc
+        user32.RegisterClassW(ctypes.byref(wc))
+        self.hwnd = user32.CreateWindowExW(0, wc.lpszClassName, "Remind Me watcher", 0,
+                                           0, 0, 0, 0, None, None, hinst, None)
+        if not self.hwnd:
+            raise OSError("CreateWindowExW failed")
+        try:
+            wts = ctypes.WinDLL("wtsapi32")
+            wts.WTSRegisterSessionNotification.argtypes = [wintypes.HWND, wintypes.DWORD]
+            wts.WTSRegisterSessionNotification(self.hwnd, 0)  # NOTIFY_FOR_THIS_SESSION
+        except Exception:
+            pass
+        self._display_guid = _guid(GUID_CONSOLE_DISPLAY_STATE)
+        self._lid_guid = _guid(GUID_LIDSWITCH_STATE_CHANGE)
+        for g in (self._display_guid, self._lid_guid):
+            user32.RegisterPowerSettingNotification(self.hwnd, ctypes.byref(g), 0)
+
+    def _wndproc(self, hwnd, msg, wparam, lparam):
+        try:
+            if msg == WM_WTSSESSION_CHANGE:
+                if wparam in (7, 2, 3):        # SESSION_LOCK, CONSOLE/REMOTE_DISCONNECT
+                    self.locked = True
+                elif wparam in (8, 1, 4):      # SESSION_UNLOCK, CONSOLE/REMOTE_CONNECT
+                    self.locked = False
+            elif msg == WM_POWERBROADCAST:
+                if wparam == 0x8013 and lparam:  # PBT_POWERSETTINGCHANGE
+                    s = ctypes.cast(lparam, ctypes.POINTER(POWERBROADCAST_SETTING)).contents
+                    key = bytes(s.PowerSetting)
+                    if key == bytes(self._display_guid):
+                        self.display_off = (s.Data == 0)     # 0 off, 1 on, 2 dimmed
+                    elif key == bytes(self._lid_guid):
+                        self.lid_closed = (s.Data == 0)      # 0 closed, 1 open
+                elif wparam == 0x0004:          # PBT_APMSUSPEND
+                    self.suspending_at = time.time()
+                elif wparam in (0x0007, 0x0012):  # PBT_APMRESUMESUSPEND / RESUMEAUTOMATIC
+                    self.suspending_at = 0.0
+                return 1
+        except Exception:
+            pass
+        return user32.DefWindowProcW(hwnd, msg, wparam, lparam)
+
+    def dormant_reason(self):
+        """Why the app should pause right now, or None."""
+        if self.locked or is_session_locked():
+            return "screen locked"
+        if self.display_off:
+            # covers lid closed (unless an external monitor keeps the display on)
+            return "lid closed" if self.lid_closed else "display off"
+        if self.suspending_at and time.time() - self.suspending_at < 20:
+            return "going to sleep"
+        if screensaver_running():
+            return "screensaver"
+        return None

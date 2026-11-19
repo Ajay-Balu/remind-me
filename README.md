@@ -62,7 +62,7 @@ When you're idle, it can nudge the mouse a pixel and put it back, so your PC doe
 
 ### Run from source
 ```bat
-git clone https://github.com/YOUR-USERNAME/remind-me.git
+git clone https://github.com/Ajay-Balu/remind-me.git
 cd remind-me
 run.bat
 ```
